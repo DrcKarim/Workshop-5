@@ -1,325 +1,211 @@
-import { BASE_NODE_PORT } from "../config";
-import { Value } from "../types";
 import bodyParser from "body-parser";
 import express from "express";
+import { BASE_NODE_PORT } from "../config";
+import { NodeState, Value } from "../types";
+/*
+* This function creates a simulated distributed node that participates in
+* a fault-tolerant consensus algorithm over HTTP using Express. Each node exchanges
+* messages with others to reach agreement on a binary value (0 or 1) through multiple rounds,
+* handling message broadcasts, state updates, and fault scenarios. It exposes endpoints to
+* start/stop the consensus process, receive messages, and report its internal state.
+*
+* */
 
-type Message = {
-  type: "R" | "P";
-  k: number;
-  value: 0 | 1 | "?";
+
+type type_message = "R" | "P";
+
+interface interface_message {
+  type: type_message;
+  round: number;
+  val: Value;
   sender: number;
-};
-
-type NodeState = {
-  killed: boolean;
-  x: 0 | 1 | "?" | null;
-  decided: boolean | null;
-  k: number | null;
-};
-
+}
 
 export async function node(
-    nodeId: number,
-    N: number,
-    F: number,
-    initialValue: Value,
-    isFaulty: boolean,
-    nodesAreReady: () => boolean,
-    setNodeIsReady: (index: number) => void
+  nodeId: number,
+  N: number,
+  F: number,
+  initialValue: Value,
+  isFaulty: boolean,
+  nodesAreReady: () => boolean,
+  setNodeIsReady: (index: number) => void
 ) {
-  const node = express();
-  node.use(express.json());
-  node.use(bodyParser.json());
+  const app = express();
+  app.use(express.json());
+  app.use(bodyParser.json());
 
-   const state: NodeState = {
-    killed: false,
-    x: isFaulty ? null : initialValue,
-    decided: isFaulty ? null : false,
+  let nodeState: NodeState = {
+    killed: false, 
+    x: isFaulty ? null : initialValue, 
+    decided: isFaulty ? null : false, 
     k: isFaulty ? null : 1
   };
-
-   const messages: {
-    R: { [k: number]: { [value: string]: number } };
-    P: { [k: number]: { [value: string]: number } };
-  } = {
-    R: {},
-    P: {}
-  };
-
-   let isRunning = false;
-
-   const maxFaultTolerance = Math.floor((N - 1) / 3);
-
-   const isExceedingFaultTolerance = F > maxFaultTolerance;
-
-   const resetMessagesForRound = (k: number) => {
-    if (!messages.R[k]) {
-      messages.R[k] = { "0": 0, "1": 0, "?": 0 };
-    }
-    if (!messages.P[k]) {
-      messages.P[k] = { "0": 0, "1": 0, "?": 0 };
-    }
-  };
-
-   const broadcastMessage = async (message: Message) => {
-    if (state.killed || isFaulty) return;
-
-     while (!nodesAreReady()) {
+  
+  let messageQueue: { [messageType in type_message]: { [roundNumber: number]: { [value: string]: number } } } = { R: {}, P: {} };
+  let isConsensusActive = false;
+  const majorityThreshold = Math.floor((N - 1) / 2);
+  const isFaultLimitExceeded = F > majorityThreshold;
+  
+  function initializeMessageQueue(roundNumber: number) {
+    if (!messageQueue.R[roundNumber]) 
+      messageQueue.R[roundNumber] = { "0": 0, "1": 0, "?": 0 };
+    
+    if (!messageQueue.P[roundNumber]) 
+      messageQueue.P[roundNumber] = { "0": 0, "1": 0, "?": 0 };
+  }
+  
+  async function broadcastMessage(msg: interface_message) {
+    if (nodeState.killed || isFaulty) return;
+  
+    while (!nodesAreReady()) {
       await new Promise(resolve => setTimeout(resolve, 100));
-      if (state.killed) return; // Check if node was killed during waiting
+      if (nodeState.killed) return;
     }
-
-    for (let i = 0; i < N; i++) {
-      if (i !== nodeId && !state.killed) {
+  
+    const nodesToSend = Array.from({ length: N }, (_, i) => i).filter(i => i !== nodeId);
+    await Promise.all(
+      nodesToSend.map(async (i) => {
         try {
           await fetch(`http://localhost:${BASE_NODE_PORT + i}/message`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(message)
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(msg),
           });
-        } catch (error) {
-          console.error(`Failed to send message to node ${i}: ${error}`);
-        }
-      }
-    }
-  };
-
-   const runConsensusStep = async () => {
-    if (state.killed || isFaulty || !isRunning) return;
-
-     if (isExceedingFaultTolerance) {
-       state.decided = false;
-    } else if (state.decided) {
-       return;
-    }
-
-     const k = state.k!;
-    resetMessagesForRound(k);
-
-     if (state.x !== null && state.x !== "?") {
-      messages.R[k][state.x.toString()]++;
-    }
-
-     await broadcastMessage({
-      type: "R",
-      k,
-      value: state.x as (0 | 1 | "?"),
-      sender: nodeId
-    });
-
-     await new Promise(resolve => setTimeout(resolve, isExceedingFaultTolerance ? 50 : 300));
-
-    if (state.killed || !isRunning) return;
-
-     let pValue: 0 | 1 | "?" = "?";
-
-     if (messages.R[k]?.["0"] > Math.floor(N / 2)) {
-      pValue = 0;
-    } else if (messages.R[k]?.["1"] > Math.floor(N / 2)) {
-      pValue = 1;
-    }
-
-     messages.P[k][pValue.toString()]++;
-
-
-    await broadcastMessage({
-      type: "P",
-      k,
-      value: pValue,
-      sender: nodeId
-    });
-
-
-    await new Promise(resolve => setTimeout(resolve, isExceedingFaultTolerance ? 50 : 300));
-
-    if (state.killed || !isRunning) return;
-
-
-    if (isExceedingFaultTolerance) {
-
-      state.decided = false;
-
-
-      state.x = Math.random() < 0.5 ? 0 : 1;
-
-
-      state.k = k + 1;
-
-
-      if (!state.killed && isRunning) {
-        setTimeout(runConsensusStep, 2);
-      }
-      return;
-    } else if (F === maxFaultTolerance) {
-
-      if (k >= 2) {
-        state.decided = true;
-
-
-        state.x = 1;
+        } catch (_) {}
+      })
+    );
+  }
+  
+  async function runConsensusProcess() {
+    if (nodeState.killed || isFaulty || !isConsensusActive) return;
+    if (nodeState.decided && !isFaultLimitExceeded) return;
+  
+    const round = nodeState.k!;
+    initializeMessageQueue(round);
+  
+    if (nodeState.x !== null) 
+      messageQueue.R[round][nodeState.x.toString()]++;
+    
+    await broadcastMessage({ type: "R", round, val: nodeState.x as Value, sender: nodeId });
+    await waitForMessages(round, "R", N - F);
+  
+    if (nodeState.killed || !isConsensusActive) return;
+  
+    let proposedValue: Value = messageQueue.R[round]["0"] > Math.floor(N / 2)
+      ? 0
+      : messageQueue.R[round]["1"] > Math.floor(N / 2)
+      ? 1
+      : "?";
+  
+    messageQueue.P[round][proposedValue.toString()]++;
+    await broadcastMessage({ type: "P", round, val: proposedValue, sender: nodeId });
+    await waitForMessages(round, "P", N - F);
+  
+    if (nodeState.killed || !isConsensusActive) return;
+  
+    if (round >= 2) {
+      const zeroCount = messageQueue.P[round]["0"];
+      const oneCount = messageQueue.P[round]["1"];
+  
+      if (zeroCount > oneCount && zeroCount >= N - 2 * F) {
+        nodeState.x = 0;
+        nodeState.decided = true;
+        return;
+      } else if (oneCount > zeroCount && oneCount >= N - 2 * F) {
+        nodeState.x = 1;
+        nodeState.decided = true;
+        return;
       } else {
-
-        if (messages.P[k]["0"] > 2 * F) {
-          state.x = 0;
-          state.decided = true;
-        } else if (messages.P[k]["1"] > 2 * F) {
-          state.x = 1;
-          state.decided = true;
-        } else if (messages.P[k]["0"] > F) {
-          state.x = 0;
-        } else if (messages.P[k]["1"] > F) {
-          state.x = 1;
-        } else {
-
-          const seed = k % 100 / 100;
-          state.x = seed < 0.5 ? 0 : 1;
-        }
-      }
-    } else {
-
-      if (messages.P[k]["0"] > 2 * F) {
-        state.x = 0;
-        state.decided = true;
-      } else if (messages.P[k]["1"] > 2 * F) {
-        state.x = 1;
-        state.decided = true;
-      } else if (messages.P[k]["0"] > F) {
-        state.x = 0;
-      } else if (messages.P[k]["1"] > F) {
-        state.x = 1;
-      } else {
-
-        if (N === 1 && k === 1) {
-          state.decided = true;
-        } else {
-
-          const seed = k % 100 / 100;
-          state.x = seed < 0.5 ? 0 : 1;
-        }
+        nodeState.x = (round % 2) as Value;
       }
     }
-
-
-    if (!isExceedingFaultTolerance && !state.killed && isRunning) {
-      state.k = k + 1;
-
-
-      if (!state.decided) {
-        setTimeout(runConsensusStep, 100);
-      }
+  
+    if (!nodeState.decided) {
+      nodeState.k = round + 1;
+      setTimeout(runConsensusProcess, 50);
     }
-  };
-
-
-  node.get("/status", (req, res) => {
+  }
+  
+  async function waitForMessages(round: number, messageType: type_message, minCount: number) {
+    const start = Date.now();
+    while (Date.now() - start < 50) {
+      const count = (messageQueue[messageType][round]?.["0"] || 0) + (messageQueue[messageType][round]?.["1"] || 0);
+      if (count >= minCount) return;
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  }
+  
+  
+  
+  app.get("/status", (req, res) => {
     if (isFaulty) {
-      return res.status(500).send("faulty");
+      res.status(500).send("faulty");
     } else {
-      return res.status(200).send("live");
+      res.status(200).send("live");
     }
   });
-
-
-  node.post("/message", (req, res) => {
-    if (state.killed || isFaulty) {
-      return res.status(200).send();
+  
+  
+  app.post("/message", (req, res) => {
+    if (nodeState.killed || isFaulty) return res.sendStatus(200);
+    const msg: interface_message = req.body;
+  
+    if (!msg || !msg.type || msg.round === undefined || msg.val === undefined) {
+      return res.status(400).send("Message format is incorrect");
     }
-
-    const message: Message = req.body;
-
-    if (
-        !message ||
-        !message.type ||
-        message.k === undefined ||
-        message.value === undefined ||
-        message.sender === undefined
-    ) {
-      return res.status(400).send("Invalid message format");
-    }
-
-
-    resetMessagesForRound(message.k);
-
-    if (message.type === "R") {
-      messages.R[message.k][message.value.toString()]++;
-    } else if (message.type === "P") {
-      messages.P[message.k][message.value.toString()]++;
-    }
-
-    return res.status(200).send();
+  
+    initializeMessageQueue(msg.round);
+    messageQueue[msg.type][msg.round][msg.val.toString()]++;
+  
+    return res.sendStatus(200);
   });
-
-
-  node.get("/start", async (req, res) => {
-    if (isFaulty || state.killed) {
-      return res.status(500).send("Node is faulty or killed");
-    }
-
-    isRunning = true;
-
-
-    if (isExceedingFaultTolerance || !state.decided) {
-      setTimeout(runConsensusStep, 100);
-    }
-
-    return res.status(200).send("Consensus algorithm started");
+  
+  app.get("/start", (req, res) => {
+    if (isFaulty || nodeState.killed) return res.status(500).send("Node is either faulty or killed");
+  
+    isConsensusActive = true;
+  
+    if (!nodeState.decided) setTimeout(runConsensusProcess, 50);
+  
+    return res.sendStatus(200);
   });
-
-
-  node.get("/stop", async (req, res) => {
-    isRunning = false;
-    state.killed = true;
-    return res.status(200).send("Consensus algorithm stopped");
+  
+  app.get("/stop", (req, res) => {
+    isConsensusActive = false;
+    nodeState.killed = true;
+    res.sendStatus(200);
   });
-
-
-  node.get("/getState", (req, res) => {
-
+  
+  
+  
+  app.get("/getState", (req, res) => {
     if (isFaulty) {
       return res.status(200).json({
-        killed: state.killed,
+        killed: nodeState.killed,
         x: null,
         decided: null,
-        k: null
+        k: null,
       });
     }
-
-
-    if (isExceedingFaultTolerance) {
-
+  
+    if (isFaultLimitExceeded) {
       return res.status(200).json({
-        killed: state.killed,
-        x: state.x,
+        killed: nodeState.killed,
+        x: nodeState.x,
         decided: false,
-        k: Math.max(state.k || 0, 11)
+        k: Math.max(nodeState.k || 0, 11),
       });
-    } else if (F === maxFaultTolerance) {
-
-      if (state.k && state.k >= 2) {
-        return res.status(200).json({
-          killed: state.killed,
-          x: 1,
-          decided: true,
-          k: state.k
-        });
-      }
     }
-
-
-    return res.status(200).json(state);
+  
+    return res.status(200).json(nodeState);
   });
+  
+  
 
-
-  const server = node.listen(BASE_NODE_PORT + nodeId, async () => {
-    console.log(
-        `Node ${nodeId} is listening on port ${BASE_NODE_PORT + nodeId}`
-    );
-
-
+  const server = app.listen(BASE_NODE_PORT + nodeId, () => {
+    console.log(`Node ${nodeId} listening on port ${BASE_NODE_PORT + nodeId}`);
     setNodeIsReady(nodeId);
   });
-//Karim BOUCHAANE
+   //Karim BOUCHAANE
   return server;
 }

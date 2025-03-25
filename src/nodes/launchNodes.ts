@@ -1,6 +1,13 @@
 import { Value } from "../types";
 import { node } from "./node";
-
+/*
+In this class
+N is a total number of nodes in the network and
+F is a number of faulty nodes in the network
+faultyList is a list of boolean type faulty values
+for each node true if the node is faulty and false if is empty
+And there is a function to launch nodes
+ */
 export async function launchNodes(
   N: number,
   F: number,
@@ -24,7 +31,6 @@ export async function launchNodes(
     nodesStates[index] = true;
   }
 
-  // launch nodes
   for (let index = 0; index < N; index++) {
     const newPromise = node(
       index,
@@ -39,6 +45,7 @@ export async function launchNodes(
   }
 
   const servers = await Promise.all(promises);
-//Karim BOUCHAANE
+
+  // Karim BOUCHAANE
   return servers;
 }

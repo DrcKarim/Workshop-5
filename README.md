@@ -1,3 +1,23 @@
+## Testing of the workshop 5
+First you need to install yarn by: 
+```
+npm install -g yarn
+```
+Then install yarn package and dependencies required to run the project
+```
+yarn install
+```
+After pleaes run the project using:
+```
+yarn start
+```
+And then run the test commande: 
+```
+yarn test
+```
+## This is a screenshot proving that all tests passed successfully:
+![img.png](img.png)
+
 # ben-or-consensus-algorithm
 
 Your goal for this exercise is to implement a version of the Ben Or consensus algorithm
@@ -43,3 +63,5 @@ You are graded out of 20 points based on the unit tests provided in the `__test_
 Note that not all tests are provided so you can secure a number of points but the rest will be graded after you submit the exercise.
 
 This exercise should be completed individually, you are not allowed to reuse code from other students. Any detected instances of copied code will incur a reduction of your grade.
+
+Workshop done by: Karim BOUCHAANE

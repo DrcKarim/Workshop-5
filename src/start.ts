@@ -39,5 +39,5 @@ async function main() {
 
   await startConsensus(initialValues.length);
 }
-
+//This is our main in start class
 main();
