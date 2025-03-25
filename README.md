@@ -1,3 +1,6 @@
+## This is a screenshot proving that all tests passed successfully:
+![img.png](img.png)
+
 ## Testing of the workshop 5
 First you need to install yarn by: 
 ```
@@ -15,8 +18,7 @@ And then run the test commande:
 ```
 yarn test
 ```
-## This is a screenshot proving that all tests passed successfully:
-![img.png](img.png)
+
 
 # ben-or-consensus-algorithm
 
